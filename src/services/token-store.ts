@@ -10,7 +10,7 @@ export function defaultTokenFile(): string {
 /** Writes JSON readable only by the owner, replacing the file in one rename so a crash never leaves half a token. */
 export function writePrivateJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const next = `${path}.next`;
+  const next = `${path}.${process.pid}.next`;
   writeFileSync(next, `${JSON.stringify(value)}\n`, { mode: 0o600 });
   chmodSync(next, 0o600);
   renameSync(next, path);

@@ -94,7 +94,7 @@ These accounts have no CookUnity password. Leave `COOKUNITY_EMAIL` and `COOKUNIT
 2. Open https://subscription.cookunity.com, paste the script into the browser console, and copy the `code` and `state` it returns.
 3. Run `cookunity-mcp-login finish --code <code> --state <state>`.
 
-The server then signs in with the saved refresh token (owner-only file) and saves each new one CookUnity issues. If a refresh fails, run the login again.
+The server then signs in with the saved refresh token (owner-only file) and saves each new one CookUnity issues. If a refresh fails, run the login again. Each refresh token works once, so give each running server its own token file (`COOKUNITY_TOKEN_FILE`).
 
 ## Configuration
 

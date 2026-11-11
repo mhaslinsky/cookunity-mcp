@@ -23,6 +23,7 @@ export class CookUnityAuth {
   private credentials: Credentials;
   private post: PostJson;
   private tokens: AuthTokens | null = null;
+  private signingIn: Promise<void> | null = null;
 
   constructor(credentials: Credentials, post: PostJson = postJson) {
     this.credentials = credentials;
@@ -33,8 +34,12 @@ export class CookUnityAuth {
     if (this.tokens && this.isTokenValid(this.tokens)) {
       return this.tokens.access_token;
     }
-    if (this.credentials.kind === "refresh") await this.refresh(this.credentials.tokenFile);
-    else await this.authenticate(this.credentials.email, this.credentials.password);
+    // Parallel tool calls share one sign-in: a rotated refresh token is single-use.
+    this.signingIn ??= (this.credentials.kind === "refresh"
+      ? this.refresh(this.credentials.tokenFile)
+      : this.authenticate(this.credentials.email, this.credentials.password)
+    ).finally(() => { this.signingIn = null; });
+    await this.signingIn;
     return this.tokens!.access_token;
   }
 
@@ -43,20 +48,27 @@ export class CookUnityAuth {
    * before the access token is used: losing it would mean signing in again in the browser.
    */
   private async refresh(tokenFile: string): Promise<void> {
+    const refreshToken = readRefreshToken(tokenFile);
     let data: Record<string, unknown>;
     try {
       data = await this.post(`${AUTH_BASE_URL}/oauth/token`, {
         grant_type: "refresh_token",
         client_id: AUTH_CLIENT_ID,
-        refresh_token: readRefreshToken(tokenFile),
+        refresh_token: refreshToken,
       });
     } catch (error) {
       throw new Error(`CookUnity sign-in refresh failed (${this.getErrorMessage(error)}). Run cookunity-mcp-login again.`);
     }
-    if (typeof data.access_token !== "string" || typeof data.expires_in !== "number") {
-      throw new Error("CookUnity sign-in refresh returned no access token. Run cookunity-mcp-login again.");
+    const rotated = data.refresh_token;
+    if (typeof data.access_token !== "string" || typeof data.expires_in !== "number" || (rotated !== undefined && (typeof rotated !== "string" || rotated === ""))) {
+      throw new Error("CookUnity sign-in refresh returned an incomplete reply. Run cookunity-mcp-login again.");
     }
-    if (typeof data.refresh_token === "string") writePrivateJson(tokenFile, { refresh_token: data.refresh_token });
+    // A grant without rotation omits refresh_token, and the saved one stays valid.
+    try {
+      if (rotated !== undefined) writePrivateJson(tokenFile, { refresh_token: rotated });
+    } catch (error) {
+      throw new Error(`The new CookUnity refresh token could not be saved to ${tokenFile} (${(error as Error).message}). Run cookunity-mcp-login again.`);
+    }
     this.tokens = {
       access_token: data.access_token,
       expires_at: Date.now() + data.expires_in * 1000,
