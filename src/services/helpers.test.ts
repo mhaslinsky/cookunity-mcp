@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chefName, deliveryTotal, entityIdOf, findDay, formatDelivery, mealSource, pickNextDelivery, sourceMeals } from "./helpers.js";
+import { chefName, deliveryTotal, entityIdOf, findDay, formatDelivery, formatPrice, mealSource, pickNextDelivery, sourceMeals } from "./helpers.js";
 import type { UpcomingDay } from "../types.js";
 
 const pick = { name: "Auto Bowl", inventoryId: "ii-1", chef_firstname: "Ana", chef_lastname: "Ruiz", meat_type: null, qty: 1 };
@@ -35,6 +35,20 @@ test("a confirmed order is totalled by its grand total, and a stale auto-pick ca
   assert.equal(confirmed.recommendation_items[0]!.chef, null);
   const noTotal = formatDelivery(day({ order: { id: "9", grandTotal: null, items: [orderItem] } }));
   assert.equal(deliveryTotal(noTotal, sourceMeals(noTotal)), null);
+});
+
+test("an auto-pick week has no known prices, so its total is null, not $0.00", () => {
+  const picks = formatDelivery(day({ recommendation: { meals: [pick] } }));
+  assert.equal(deliveryTotal(picks, sourceMeals(picks)), null);
+  assert.equal(formatPrice(null), "price unknown");
+});
+
+test("a cart with one unpriced item has a null total, never a partial sum", () => {
+  const unpriced = { ...cartEntry, product: { ...cartEntry.product, price_incl_tax: null } };
+  const priced = formatDelivery(day({ cart: [cartEntry] }));
+  assert.equal(deliveryTotal(priced, sourceMeals(priced)), 23);
+  const mixed = formatDelivery(day({ cart: [cartEntry, unpriced] }));
+  assert.equal(deliveryTotal(mixed, sourceMeals(mixed)), null);
 });
 
 test("meal ids arrive as strings and leave as integers; a missing id is refused", () => {
