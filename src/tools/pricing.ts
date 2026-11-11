@@ -43,6 +43,7 @@ Error Handling:
         let meals: MealInput[];
         let pricedSource: MealSource | "given" = "given";
         let menuDate = date;
+        let deliveryDate = date;
 
         if (params.meals && params.meals.length > 0) {
           meals = params.meals.map((m) => ({
@@ -64,8 +65,10 @@ Error Handling:
             };
           }
           pricedSource = source;
-          // Prices and menus are keyed by the Sunday date, whichever date the caller passed.
+          // Prices and menus are keyed by the Sunday date; the output reports the delivery date the
+          // other tools show, whichever of the two the caller passed.
           menuDate = day.date;
+          deliveryDate = day.displayDate;
           if (source === "auto_picks") {
             // Auto-picks carry no meal id in upcomingDays, so take it from the menu by inventoryId.
             const menu = await api.getMenu(menuDate);
@@ -74,6 +77,9 @@ Error Handling:
               const menuId = idByInventory.get(pick.inventoryId);
               if (menuId === undefined) {
                 throw new Error(`Auto-pick "${pick.name}" is not on the ${day.date} menu, so its meal id is unknown. Pass meals directly.`);
+              }
+              if (!Number.isInteger(pick.qty) || pick.qty < 1) {
+                throw new Error(`Auto-pick "${pick.name}" has no quantity. Pass meals directly.`);
               }
               return { entityId: entityIdOf(menuId, pick.name), quantity: pick.qty, inventoryId: pick.inventoryId };
             });
@@ -92,7 +98,7 @@ Error Handling:
         const breakdown = await api.getPriceBreakdown(menuDate, meals);
 
         const output = {
-          date: menuDate,
+          date: deliveryDate,
           meal_source: pricedSource,
           qty_plan_meals: breakdown.qtyPlanMeals,
           qty_items: breakdown.qtyItems,
@@ -112,7 +118,7 @@ Error Handling:
           text = JSON.stringify(output, null, 2);
         } else {
           const lines = [
-            `# Order Summary — ${output.date}`,
+            `# Order Summary: ${output.date}`,
             "",
             `Priced: ${pricedSource === "given" ? "the meals passed in" : pricedSource.replace("_", "-")}`,
             "",

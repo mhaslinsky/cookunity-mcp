@@ -35,7 +35,12 @@ test("a confirmed order is totalled by its grand total, and a stale auto-pick ca
   assert.equal(confirmed.recommendation_items[0]!.chef, null);
   const noTotal = formatDelivery(day({ order: { id: "9", grandTotal: null, items: [orderItem] } }));
   assert.equal(deliveryTotal(noTotal, sourceMeals(noTotal)), null);
+});
+
+test("meal ids arrive as strings and leave as integers; a missing id is refused", () => {
+  assert.equal(entityIdOf("1091", "Order Bowl"), 1091);
   assert.throws(() => entityIdOf(null, "Order Bowl"), /Order Bowl/);
+  assert.throws(() => entityIdOf("", "Order Bowl"), /Order Bowl/);
 });
 
 test("chef names: two names, one name, blank first name", () => {
