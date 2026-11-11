@@ -3,32 +3,86 @@ import { wrapper } from "axios-cookiejar-support";
 import { CookieJar } from "tough-cookie";
 import { AuthTokens } from "../types.js";
 import { AUTH_BASE_URL, AUTH_CLIENT_ID, AUTH_REALM } from "../constants.js";
+import { readRefreshToken, writePrivateJson } from "./token-store.js";
 
 const REDIRECT_URI = "https://www.cookunity.com";
 
-export class CookUnityAuth {
-  private email: string;
-  private password: string;
-  private tokens: AuthTokens | null = null;
+/** A password account signs in with email and password; a Google-linked account uses a saved refresh token. */
+export type Credentials =
+  | { kind: "password"; email: string; password: string }
+  | { kind: "refresh"; tokenFile: string };
 
-  constructor(email: string, password: string) {
-    this.email = email;
-    this.password = password;
+export type PostJson = (url: string, body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+
+const postJson: PostJson = async (url, body) => {
+  const response = await axios.post(url, body, { headers: { "Content-Type": "application/json" }, timeout: 30000 });
+  return response.data as Record<string, unknown>;
+};
+
+export class CookUnityAuth {
+  private credentials: Credentials;
+  private post: PostJson;
+  private tokens: AuthTokens | null = null;
+  private signingIn: Promise<void> | null = null;
+
+  constructor(credentials: Credentials, post: PostJson = postJson) {
+    this.credentials = credentials;
+    this.post = post;
   }
 
   async getAccessToken(): Promise<string> {
     if (this.tokens && this.isTokenValid(this.tokens)) {
       return this.tokens.access_token;
     }
-    await this.authenticate();
+    // Parallel tool calls share one sign-in: a rotated refresh token is single-use.
+    this.signingIn ??= (this.credentials.kind === "refresh"
+      ? this.refresh(this.credentials.tokenFile)
+      : this.authenticate(this.credentials.email, this.credentials.password)
+    ).finally(() => { this.signingIn = null; });
+    await this.signingIn;
     return this.tokens!.access_token;
+  }
+
+  /**
+   * Auth0 rotates the refresh token on every use and rejects the old one, so the new one is saved
+   * before the access token is used: losing it would mean signing in again in the browser.
+   */
+  private async refresh(tokenFile: string): Promise<void> {
+    const refreshToken = readRefreshToken(tokenFile);
+    let data: Record<string, unknown>;
+    try {
+      data = await this.post(`${AUTH_BASE_URL}/oauth/token`, {
+        grant_type: "refresh_token",
+        client_id: AUTH_CLIENT_ID,
+        refresh_token: refreshToken,
+      });
+    } catch (error) {
+      // Only a rejected token needs the browser login; a network error or 5xx leaves the saved one valid.
+      const rejected = axios.isAxiosError(error) && [400, 401, 403].includes(error.response?.status ?? 0);
+      const next = rejected ? "Run cookunity-mcp-login again." : "The saved sign-in is kept; try again.";
+      throw new Error(`CookUnity sign-in refresh failed (${this.getErrorMessage(error)}). ${next}`);
+    }
+    const rotated = data.refresh_token;
+    if (typeof data.access_token !== "string" || typeof data.expires_in !== "number" || (rotated !== undefined && (typeof rotated !== "string" || rotated === ""))) {
+      throw new Error("CookUnity sign-in refresh returned an incomplete reply. Run cookunity-mcp-login again.");
+    }
+    // A grant without rotation omits refresh_token, and the saved one stays valid.
+    try {
+      if (rotated !== undefined) writePrivateJson(tokenFile, { refresh_token: rotated });
+    } catch (error) {
+      throw new Error(`The new CookUnity refresh token could not be saved to ${tokenFile} (${(error as Error).message}). Run cookunity-mcp-login again.`);
+    }
+    this.tokens = {
+      access_token: data.access_token,
+      expires_at: Date.now() + data.expires_in * 1000,
+    };
   }
 
   private isTokenValid(tokens: AuthTokens): boolean {
     return Date.now() < tokens.expires_at - 60000;
   }
 
-  private async authenticate(): Promise<void> {
+  private async authenticate(email: string, password: string): Promise<void> {
     try {
       // Create a session with cookie jar (Auth0 requires cookies across requests)
       const jar = new CookieJar();
@@ -38,8 +92,8 @@ export class CookUnityAuth {
       const r1 = await client.post(`${AUTH_BASE_URL}/co/authenticate`, {
         client_id: AUTH_CLIENT_ID,
         credential_type: "http://auth0.com/oauth/grant-type/password-realm",
-        username: this.email,
-        password: this.password,
+        username: email,
+        password,
         realm: AUTH_REALM,
       }, {
         headers: { "Content-Type": "application/json", "Origin": "https://www.cookunity.com" },

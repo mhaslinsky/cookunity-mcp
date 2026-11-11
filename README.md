@@ -80,10 +80,21 @@ npx cookunity-mcp-server
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `COOKUNITY_EMAIL` | Yes | CookUnity account email |
-| `COOKUNITY_PASSWORD` | Yes | CookUnity account password |
+| `COOKUNITY_EMAIL` | For password accounts | CookUnity account email |
+| `COOKUNITY_PASSWORD` | For password accounts | CookUnity account password |
+| `COOKUNITY_TOKEN_FILE` | No | Where the refresh token is kept (default `~/.config/cookunity-mcp/token.json`) |
 | `TRANSPORT` | No | `stdio` (default) or `http` |
 | `PORT` | No | HTTP port when using `http` transport (default: 3000) |
+
+### Accounts that sign in with Google or Apple
+
+These accounts have no CookUnity password. Leave `COOKUNITY_EMAIL` and `COOKUNITY_PASSWORD` unset and sign in once from a browser that is already signed in to CookUnity:
+
+1. Run `cookunity-mcp-login start` (without a global install: `npx -p cookunity-mcp-server cookunity-mcp-login start`, and the same for `finish`). It prints a short script.
+2. Open https://subscription.cookunity.com, paste the script into the browser console, and copy the `code` and `state` it returns.
+3. Run `cookunity-mcp-login finish --code <code> --state <state>`.
+
+The server then signs in with the saved refresh token (owner-only file) and saves each new one CookUnity issues. If a refresh fails, run the login again. Each refresh token works once, so give each running server its own token file (`COOKUNITY_TOKEN_FILE`).
 
 ## Configuration
 

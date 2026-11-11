@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "cookunity-mcp-server": "dist/index.js"
+    "cookunity-mcp-server": "dist/index.js",
+    "cookunity-mcp-login": "dist/login.js"
   },
   "files": [
     "dist",
@@ -31,7 +32,8 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "tsx --test src/services/auth.test.ts"
   },
   "engines": {
     "node": ">=18"
