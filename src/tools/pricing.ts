@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CookUnityAPI } from "../services/api.js";
 import { GetPriceBreakdownSchema } from "../schemas/index.js";
 import type { GetPriceBreakdownInput } from "../schemas/index.js";
-import type { MealInput } from "../types.js";
+import type { MealInput, MealSource } from "../types.js";
 import { ResponseFormat } from "../constants.js";
 import { entityIdOf, findDay, getNextMonday, mealSource, handleError, toStructured } from "../services/helpers.js";
 
@@ -41,6 +41,8 @@ Error Handling:
       try {
         const date = params.date ?? getNextMonday();
         let meals: MealInput[];
+        let pricedSource: MealSource | "given" = "given";
+        let menuDate = date;
 
         if (params.meals && params.meals.length > 0) {
           meals = params.meals.map((m) => ({
@@ -61,10 +63,12 @@ Error Handling:
               isError: true,
             };
           }
+          pricedSource = source;
+          // Prices and menus are keyed by the Sunday date, whichever date the caller passed.
+          menuDate = day.date;
           if (source === "auto_picks") {
             // Auto-picks carry no meal id in upcomingDays, so take it from the menu by inventoryId.
-            // The menu is keyed by the Sunday date, whichever date the caller passed.
-            const menu = await api.getMenu(day.date);
+            const menu = await api.getMenu(menuDate);
             const idByInventory = new Map(menu.meals.map((meal) => [meal.inventoryId, meal.id]));
             meals = (day.recommendation?.meals ?? []).map((pick) => {
               const menuId = idByInventory.get(pick.inventoryId);
@@ -85,10 +89,11 @@ Error Handling:
           }
         }
 
-        const breakdown = await api.getPriceBreakdown(date, meals);
+        const breakdown = await api.getPriceBreakdown(menuDate, meals);
 
         const output = {
-          date,
+          date: menuDate,
+          meal_source: pricedSource,
           qty_plan_meals: breakdown.qtyPlanMeals,
           qty_items: breakdown.qtyItems,
           subtotal: breakdown.subTotalOrder,
@@ -107,7 +112,9 @@ Error Handling:
           text = JSON.stringify(output, null, 2);
         } else {
           const lines = [
-            `# Order Summary — ${date}`,
+            `# Order Summary — ${output.date}`,
+            "",
+            `Priced: ${pricedSource === "given" ? "the meals passed in" : pricedSource.replace("_", "-")}`,
             "",
             `| Item | Amount |`,
             `|------|--------|`,

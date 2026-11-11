@@ -255,7 +255,8 @@ export interface DeliveryMealInfo {
   inventory_id: string;
   quantity: number;
   price: number | null;
-  chef: string;
+  /** Null only on a list that will not ship, when its chef name is unusable. */
+  chef: string | null;
 }
 
 export interface DeliveryInfo {

@@ -63,10 +63,18 @@ export function todayInNewYork(now: Date = new Date()): string {
   }).format(now);
 }
 
+/**
+ * A confirmed order's total is its grand total (fees and taxes included), never the sum of its
+ * pre-tax item prices; null when CookUnity omits it.
+ */
+export function deliveryTotal(delivery: DeliveryInfo, meals: DeliveryMealInfo[]): number | null {
+  return delivery.meal_source === "order" ? delivery.order?.grand_total ?? null : totalPrice(meals);
+}
+
 /** upcomingDays returns meal ids as strings ("1091"); the price breakdown accepts only integers. */
 export function entityIdOf(id: unknown, mealName: string): number {
-  const entityId = Number(id);
-  if (!Number.isInteger(entityId)) throw new Error(`Meal "${mealName}" has no usable meal id (${String(id)})`);
+  const entityId = typeof id === "string" && id.trim() !== "" ? Number(id) : typeof id === "number" ? id : Number.NaN;
+  if (!Number.isInteger(entityId) || entityId <= 0) throw new Error(`Meal "${mealName}" has no usable meal id (${String(id)})`);
   return entityId;
 }
 
@@ -123,12 +131,20 @@ export function formatDelivery(day: UpcomingDay): DeliveryInfo {
         ? "paused"
         : "active";
 
+  const source = mealSource(day);
+  // Only the list that ships must name its chefs; a stale list beside it (the auto-picks left
+  // behind a confirmed order) shows an unusable chef as null instead of failing the whole day.
+  const chefFor = (listSource: MealSource, meal: Parameters<typeof chefName>[0]): string | null => {
+    if (listSource === source) return chefName(meal);
+    try { return chefName(meal); } catch { return null; }
+  };
+
   const cartItems = (day.cart || []).map((c) => ({
     name: c.product?.name ?? "Unknown",
     inventory_id: c.product?.inventoryId ?? "",
     quantity: c.qty,
     price: c.product?.price_incl_tax ?? null,
-    chef: chefName({ ...c.product }),
+    chef: chefFor("cart", { ...c.product }),
   }));
 
   const orderInfo = day.order && day.order.items?.length > 0
@@ -141,7 +157,7 @@ export function formatDelivery(day: UpcomingDay): DeliveryInfo {
           inventory_id: item.product?.inventoryId ?? "",
           quantity: item.qty,
           price: item.price?.price ?? null,
-          chef: chefName({ ...item.product }),
+          chef: chefFor("order", { ...item.product }),
         })),
         item_count: day.order.items.reduce((sum, i) => sum + (i.qty || 0), 0),
       }
@@ -153,13 +169,13 @@ export function formatDelivery(day: UpcomingDay): DeliveryInfo {
     inventory_id: m.inventoryId ?? "",
     quantity: m.qty ?? 1,
     price: null,
-    chef: chefName(m),
+    chef: chefFor("auto_picks", m),
   }));
 
   return {
     date: day.displayDate,
     status,
-    meal_source: mealSource(day),
+    meal_source: source,
     can_edit: day.canEdit,
     menu_available: day.menuAvailable,
     cutoff: day.cutoff?.time ?? null,

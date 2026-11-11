@@ -15,7 +15,7 @@ import type {
   NextDeliveryInput,
 } from "../schemas/index.js";
 import { ResponseFormat } from "../constants.js";
-import { findDay, getNextMonday, formatDelivery, formatPrice, pickNextDelivery, sourceMeals, totalPrice, handleError, toStructured } from "../services/helpers.js";
+import { findDay, getNextMonday, formatDelivery, formatPrice, pickNextDelivery, sourceMeals, deliveryTotal, handleError, toStructured } from "../services/helpers.js";
 
 export function registerDeliveryTools(server: McpServer, api: CookUnityAPI): void {
   server.registerTool(
@@ -68,17 +68,17 @@ Error Handling:
           if (d.order) {
             lines.push(`**Order** #${d.order.id} (${d.order.status ?? "unknown"}, ${formatPrice(d.order.grand_total)}):`);
             for (const item of d.order.items) {
-              lines.push(`  - ${item.name} x${item.quantity}, ${formatPrice(item.price)} (${item.chef})`);
+              lines.push(`  - ${item.name} x${item.quantity}, ${formatPrice(item.price)} (${item.chef ?? "chef unknown"})`);
             }
           } else if (d.cart_count > 0) {
             lines.push(`**Cart** (${d.cart_count} items):`);
             for (const item of d.cart_items) {
-              lines.push(`  - ${item.name} x${item.quantity}, ${formatPrice(item.price)} (${item.chef})`);
+              lines.push(`  - ${item.name} x${item.quantity}, ${formatPrice(item.price)} (${item.chef ?? "chef unknown"})`);
             }
           } else if (d.recommendation_count > 0) {
             lines.push(`**CookUnity Picks** (${d.recommendation_count} meals — not yet confirmed):`);
             for (const item of d.recommendation_items) {
-              lines.push(`  - ${item.name} x${item.quantity} (${item.chef})`);
+              lines.push(`  - ${item.name} x${item.quantity} (${item.chef ?? "chef unknown"})`);
             }
           } else {
             lines.push("**Meals**: None selected");
@@ -136,7 +136,7 @@ Error Handling:
           meal_source: delivery.meal_source,
           items,
           total_items: items.reduce((s, i) => s + i.quantity, 0),
-          total_price: totalPrice(items),
+          total_price: deliveryTotal(delivery, items),
         };
 
         if (params.response_format === ResponseFormat.JSON) {
@@ -154,7 +154,7 @@ Error Handling:
           };
           lines.push(`**${labels[delivery.meal_source]}**`, "");
           for (const item of items) {
-            lines.push(`- **${item.name}** x${item.quantity}, ${formatPrice(item.price)} (${item.chef})`);
+            lines.push(`- **${item.name}** x${item.quantity}, ${formatPrice(item.price)} (${item.chef ?? "chef unknown"})`);
           }
           lines.push("", `**Total**: ${output.total_items} items, ${formatPrice(output.total_price)}`);
         }
@@ -302,7 +302,7 @@ Returns: The nearest delivery with date, status, meal_source ('order'|'cart'|'au
           meal_source_label: sourceLabels[delivery.meal_source],
           meals,
           total_meals: meals.reduce((s, m) => s + m.quantity, 0),
-          total_price: delivery.order?.grand_total ?? totalPrice(meals),
+          total_price: deliveryTotal(delivery, meals),
         };
 
         if (params.response_format === ResponseFormat.JSON) {
@@ -316,7 +316,7 @@ Returns: The nearest delivery with date, status, meal_source ('order'|'cart'|'au
           lines.push("No meals selected yet.");
         } else {
           for (const m of meals) {
-            lines.push(`- **${m.name}** x${m.quantity}, ${formatPrice(m.price)} (${m.chef})`);
+            lines.push(`- **${m.name}** x${m.quantity}, ${formatPrice(m.price)} (${m.chef ?? "chef unknown"})`);
           }
           lines.push("", `**Total**: ${output.total_meals} meals, ${formatPrice(output.total_price)}`);
         }

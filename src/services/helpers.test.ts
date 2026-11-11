@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chefName, findDay, mealSource, pickNextDelivery } from "./helpers.js";
+import { chefName, deliveryTotal, entityIdOf, findDay, formatDelivery, mealSource, pickNextDelivery, sourceMeals } from "./helpers.js";
 import type { UpcomingDay } from "../types.js";
 
 const pick = { name: "Auto Bowl", inventoryId: "ii-1", chef_firstname: "Ana", chef_lastname: "Ruiz", meat_type: null, qty: 1 };
@@ -26,6 +26,16 @@ test("auto-picks ship when the order and cart are empty", () => {
 
 test("no order, cart or auto-picks is none", () => {
   assert.equal(mealSource(day({ order: { id: "9", grandTotal: 0, items: [] }, recommendation: { meals: [] } })), "none");
+});
+
+test("a confirmed order is totalled by its grand total, and a stale auto-pick cannot break it", () => {
+  const stalePick = { ...pick, chef_firstname: "  " };
+  const confirmed = formatDelivery(day({ order: { id: "9", grandTotal: 30, items: [orderItem] }, recommendation: { meals: [stalePick] } }));
+  assert.equal(deliveryTotal(confirmed, sourceMeals(confirmed)), 30);
+  assert.equal(confirmed.recommendation_items[0]!.chef, null);
+  const noTotal = formatDelivery(day({ order: { id: "9", grandTotal: null, items: [orderItem] } }));
+  assert.equal(deliveryTotal(noTotal, sourceMeals(noTotal)), null);
+  assert.throws(() => entityIdOf(null, "Order Bowl"), /Order Bowl/);
 });
 
 test("chef names: two names, one name, blank first name", () => {
