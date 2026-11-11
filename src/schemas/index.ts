@@ -6,7 +6,7 @@ const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 export const DateSchema = z
   .string()
   .regex(datePattern, "Date must be YYYY-MM-DD format")
-  .describe("Delivery date in YYYY-MM-DD format (must be a Monday). Defaults to next Monday if omitted.");
+  .describe("Delivery date in YYYY-MM-DD format: the date cookunity_list_deliveries shows, or its Sunday menu key (the cart tools take only the Sunday key). Defaults to the next scheduled delivery where it is optional.");
 
 export const ResponseFormatSchema = z
   .nativeEnum(ResponseFormat)

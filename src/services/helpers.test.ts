@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chefName, deliveryTotal, entityIdOf, findDay, formatDelivery, formatPrice, mealSource, pickNextDelivery, sourceMeals } from "./helpers.js";
+import { chefName, deliveryTotal, entityIdOf, formatDelivery, formatPrice, mealSource, nextDelivery, resolveDelivery, sourceMeals } from "./helpers.js";
 import type { UpcomingDay } from "../types.js";
 
 const pick = { name: "Auto Bowl", inventoryId: "ii-1", chef_firstname: "Ana", chef_lastname: "Ruiz", meat_type: null, qty: 1 };
@@ -63,21 +63,24 @@ test("chef names: two names, one name, blank first name", () => {
   assert.throws(() => chefName({ name: "Mystery Stew", chef_firstname: "  ", chef_lastname: "Ruiz" }), /Mystery Stew/);
 });
 
-test("a date that is both a delivery's menu key and an unscheduled slot's display date finds the delivery", () => {
+test("either date of a delivery resolves to it, even when an unscheduled slot shares the Sunday string", () => {
   // Live on Nov 11: the unscheduled Sunday slot shown as Nov 15 comes before the Nov 16 delivery keyed 2026-11-15.
   const unscheduledSunday = day({ date: "2026-11-15", displayDate: "2026-11-15", scheduled: false });
   const delivery = day({});
-  assert.equal(findDay([unscheduledSunday, delivery], "2026-11-15"), delivery);
-  assert.equal(findDay([unscheduledSunday, delivery], "2026-11-16"), delivery);
+  const expected = { day: delivery, menuKey: "2026-11-15", displayDate: "2026-11-16" };
+  assert.deepEqual(resolveDelivery([unscheduledSunday, delivery], "2026-11-15"), expected);
+  assert.deepEqual(resolveDelivery([unscheduledSunday, delivery], "2026-11-16"), expected);
+  assert.equal(resolveDelivery([unscheduledSunday, delivery], "2026-11-17"), undefined);
 });
 
-test("next delivery compares displayDate in New York time", () => {
+test("next delivery compares displayDate in New York time and returns the resolved shape", () => {
   const upcoming = day({});
+  const resolvedUpcoming = { day: upcoming, menuKey: "2026-11-15", displayDate: "2026-11-16" };
   const past = day({ date: "2026-11-08", displayDate: "2026-11-09" });
-  assert.equal(pickNextDelivery([past, upcoming], new Date("2026-11-11T15:00:00Z")), upcoming);
-  assert.equal(pickNextDelivery([past], new Date("2026-11-11T15:00:00Z")), undefined);
+  assert.deepEqual(nextDelivery([past, upcoming], new Date("2026-11-11T15:00:00Z")), resolvedUpcoming);
+  assert.equal(nextDelivery([past], new Date("2026-11-11T15:00:00Z")), undefined);
   // Monday delivery day: the Sunday key is already behind today, the display date is not.
-  assert.equal(pickNextDelivery([upcoming], new Date("2026-11-16T15:00:00Z")), upcoming);
+  assert.deepEqual(nextDelivery([upcoming], new Date("2026-11-16T15:00:00Z")), resolvedUpcoming);
   // 9 PM ET on Nov 15 is already Nov 16 in UTC; it is still the 15th in New York.
-  assert.equal(pickNextDelivery([day({ date: "2026-11-14", displayDate: "2026-11-15" })], new Date("2026-11-16T02:00:00Z"))?.displayDate, "2026-11-15");
+  assert.equal(nextDelivery([day({ date: "2026-11-14", displayDate: "2026-11-15" })], new Date("2026-11-16T02:00:00Z"))?.displayDate, "2026-11-15");
 });
