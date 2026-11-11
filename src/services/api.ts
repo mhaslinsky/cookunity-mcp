@@ -1,5 +1,5 @@
 import axios, { AxiosError } from "axios";
-import { CookUnityAuth } from "./auth.js";
+import { CookUnityAuth, type Credentials } from "./auth.js";
 import { MENU_SERVICE_URL, SUBSCRIPTION_URL } from "../constants.js";
 import type {
   Menu,
@@ -18,8 +18,8 @@ import type {
 export class CookUnityAPI {
   private auth: CookUnityAuth;
 
-  constructor(email: string, password: string) {
-    this.auth = new CookUnityAuth(email, password);
+  constructor(credentials: Credentials) {
+    this.auth = new CookUnityAuth(credentials);
   }
 
   async getMenu(date: string, filters: Record<string, unknown> = {}): Promise<Menu> {
@@ -357,7 +357,7 @@ export class CookUnityAPI {
     } catch (error) {
       if (error instanceof AxiosError) {
         const status = error.response?.status;
-        if (status === 401) throw new Error("Authentication expired. Please check your COOKUNITY_EMAIL and COOKUNITY_PASSWORD.");
+        if (status === 401) throw new Error("CookUnity rejected the sign-in. Check COOKUNITY_EMAIL and COOKUNITY_PASSWORD, or run cookunity-mcp-login again.");
         if (status === 429) throw new Error("Rate limited by CookUnity API. Please wait before retrying.");
         throw new Error(`CookUnity API error (HTTP ${status ?? "unknown"}): ${error.message}`);
       }

@@ -3,32 +3,71 @@ import { wrapper } from "axios-cookiejar-support";
 import { CookieJar } from "tough-cookie";
 import { AuthTokens } from "../types.js";
 import { AUTH_BASE_URL, AUTH_CLIENT_ID, AUTH_REALM } from "../constants.js";
+import { readRefreshToken, writePrivateJson } from "./token-store.js";
 
 const REDIRECT_URI = "https://www.cookunity.com";
 
+/** A password account signs in with email and password; a Google-linked account uses a saved refresh token. */
+export type Credentials =
+  | { kind: "password"; email: string; password: string }
+  | { kind: "refresh"; tokenFile: string };
+
+export type PostJson = (url: string, body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+
+const postJson: PostJson = async (url, body) => {
+  const response = await axios.post(url, body, { headers: { "Content-Type": "application/json" }, timeout: 30000 });
+  return response.data as Record<string, unknown>;
+};
+
 export class CookUnityAuth {
-  private email: string;
-  private password: string;
+  private credentials: Credentials;
+  private post: PostJson;
   private tokens: AuthTokens | null = null;
 
-  constructor(email: string, password: string) {
-    this.email = email;
-    this.password = password;
+  constructor(credentials: Credentials, post: PostJson = postJson) {
+    this.credentials = credentials;
+    this.post = post;
   }
 
   async getAccessToken(): Promise<string> {
     if (this.tokens && this.isTokenValid(this.tokens)) {
       return this.tokens.access_token;
     }
-    await this.authenticate();
+    if (this.credentials.kind === "refresh") await this.refresh(this.credentials.tokenFile);
+    else await this.authenticate(this.credentials.email, this.credentials.password);
     return this.tokens!.access_token;
+  }
+
+  /**
+   * Auth0 rotates the refresh token on every use and rejects the old one, so the new one is saved
+   * before the access token is used: losing it would mean signing in again in the browser.
+   */
+  private async refresh(tokenFile: string): Promise<void> {
+    let data: Record<string, unknown>;
+    try {
+      data = await this.post(`${AUTH_BASE_URL}/oauth/token`, {
+        grant_type: "refresh_token",
+        client_id: AUTH_CLIENT_ID,
+        refresh_token: readRefreshToken(tokenFile),
+      });
+    } catch (error) {
+      throw new Error(`CookUnity sign-in refresh failed (${this.getErrorMessage(error)}). Run cookunity-mcp-login again.`);
+    }
+    if (typeof data.access_token !== "string" || typeof data.expires_in !== "number") {
+      throw new Error("CookUnity sign-in refresh returned no access token. Run cookunity-mcp-login again.");
+    }
+    if (typeof data.refresh_token === "string") writePrivateJson(tokenFile, { refresh_token: data.refresh_token });
+    this.tokens = {
+      access_token: data.access_token,
+      expires_at: Date.now() + data.expires_in * 1000,
+    };
   }
 
   private isTokenValid(tokens: AuthTokens): boolean {
     return Date.now() < tokens.expires_at - 60000;
   }
 
-  private async authenticate(): Promise<void> {
+  private async authenticate(email: string, password: string): Promise<void> {
     try {
       // Create a session with cookie jar (Auth0 requires cookies across requests)
       const jar = new CookieJar();
@@ -38,8 +77,8 @@ export class CookUnityAuth {
       const r1 = await client.post(`${AUTH_BASE_URL}/co/authenticate`, {
         client_id: AUTH_CLIENT_ID,
         credential_type: "http://auth0.com/oauth/grant-type/password-realm",
-        username: this.email,
-        password: this.password,
+        username: email,
+        password,
         realm: AUTH_REALM,
       }, {
         headers: { "Content-Type": "application/json", "Origin": "https://www.cookunity.com" },

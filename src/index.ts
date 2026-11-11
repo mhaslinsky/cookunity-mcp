@@ -9,6 +9,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CookUnityAPI } from "./services/api.js";
+import type { Credentials } from "./services/auth.js";
+import { defaultTokenFile } from "./services/token-store.js";
 import { registerMenuTools } from "./tools/menu.js";
 import { registerUserTools } from "./tools/user.js";
 import { registerDeliveryTools } from "./tools/deliveries.js";
@@ -18,18 +20,20 @@ import { registerPricingTools } from "./tools/pricing.js";
 function createServer(): McpServer {
   const email = process.env.COOKUNITY_EMAIL;
   const password = process.env.COOKUNITY_PASSWORD;
-
-  if (!email || !password) {
-    console.error("ERROR: COOKUNITY_EMAIL and COOKUNITY_PASSWORD environment variables are required.");
+  if (Boolean(email) !== Boolean(password)) {
+    console.error("ERROR: set both COOKUNITY_EMAIL and COOKUNITY_PASSWORD, or neither to use the refresh token from cookunity-mcp-login.");
     process.exit(1);
   }
+  const credentials: Credentials = email && password
+    ? { kind: "password", email, password }
+    : { kind: "refresh", tokenFile: defaultTokenFile() };
 
   const server = new McpServer({
     name: "cookunity-mcp-server",
     version: "1.0.0",
   });
 
-  const api = new CookUnityAPI(email, password);
+  const api = new CookUnityAPI(credentials);
 
   registerMenuTools(server, api);
   registerUserTools(server, api);
