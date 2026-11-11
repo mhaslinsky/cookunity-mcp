@@ -1,4 +1,4 @@
-import type { Meal, FormattedMeal, UpcomingDay, DeliveryInfo } from "../types.js";
+import type { Meal, FormattedMeal, UpcomingDay, DeliveryInfo, DeliveryMealInfo, MealSource } from "../types.js";
 import { CHARACTER_LIMIT } from "../constants.js";
 
 export function getNextMonday(): string {
@@ -8,6 +8,67 @@ export function getNextMonday(): string {
   const nextMonday = new Date(today);
   nextMonday.setDate(today.getDate() + daysUntilMonday);
   return nextMonday.toISOString().split("T")[0];
+}
+
+/** The one place that decides which of order, cart or auto-picks ships. */
+export function mealSource(day: UpcomingDay): MealSource {
+  if (day.order?.items?.length) return "order";
+  if (day.cart?.length) return "cart";
+  if (day.recommendation?.meals?.length) return "auto_picks";
+  return "none";
+}
+
+export function sourceMeals(delivery: DeliveryInfo): DeliveryMealInfo[] {
+  switch (delivery.meal_source) {
+    case "order":
+      return delivery.order?.items ?? [];
+    case "cart":
+      return delivery.cart_items;
+    case "auto_picks":
+      return delivery.recommendation_items;
+    case "none":
+      return [];
+  }
+}
+
+/** A whitespace-only last name means a one-name chef (a restaurant). */
+export function chefName(meal: { name?: string | null; chef_firstname?: string | null; chef_lastname?: string | null }): string {
+  const first = (meal.chef_firstname ?? "").trim();
+  if (!first) throw new Error(`Meal "${meal.name ?? "unknown"}" has no chef first name`);
+  const last = (meal.chef_lastname ?? "").trim();
+  return last ? `${first} ${last}` : first;
+}
+
+export function formatPrice(price: number | null): string {
+  return price === null ? "price unknown" : `$${price.toFixed(2)}`;
+}
+
+/** Null when any price is unknown, so a partial sum is never shown as a total. */
+export function totalPrice(meals: DeliveryMealInfo[]): number | null {
+  let total = 0;
+  for (const meal of meals) {
+    if (meal.price === null) return null;
+    total += meal.price * meal.quantity;
+  }
+  return total;
+}
+
+/** Today's date in the delivery timezone, as YYYY-MM-DD. */
+export function todayInNewYork(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+}
+
+/** Compares displayDate (the delivery day the site shows), not the Sunday menu key in `date`. */
+export function pickNextDelivery(days: UpcomingDay[], now: Date = new Date()): UpcomingDay | undefined {
+  const today = todayInNewYork(now);
+  return days
+    .filter((d) => d.scheduled && !d.skip && d.displayDate >= today)
+    .sort((a, b) => a.displayDate.localeCompare(b.displayDate))[0];
 }
 
 export function formatMeal(meal: Meal): FormattedMeal {
@@ -50,21 +111,21 @@ export function formatDelivery(day: UpcomingDay): DeliveryInfo {
     name: c.product?.name ?? "Unknown",
     inventory_id: c.product?.inventoryId ?? "",
     quantity: c.qty,
-    price: c.product?.price_incl_tax ?? 0,
-    chef: `${c.product?.chef_firstname ?? ""} ${c.product?.chef_lastname ?? ""}`.trim(),
+    price: c.product?.price_incl_tax ?? null,
+    chef: chefName({ ...c.product }),
   }));
 
   const orderInfo = day.order && day.order.items?.length > 0
     ? {
         id: day.order.id,
         status: day.order.orderStatus?.status ?? null,
-        grand_total: day.order.grandTotal ?? 0,
+        grand_total: day.order.grandTotal ?? null,
         items: day.order.items.map((item) => ({
           name: item.product?.name ?? "Unknown",
           inventory_id: item.product?.inventoryId ?? "",
           quantity: item.qty,
-          price: item.price?.price ?? 0,
-          chef: `${item.product?.chef_firstname ?? ""} ${item.product?.chef_lastname ?? ""}`.trim(),
+          price: item.price?.price ?? null,
+          chef: chefName({ ...item.product }),
         })),
         item_count: day.order.items.reduce((sum, i) => sum + (i.qty || 0), 0),
       }
@@ -75,13 +136,14 @@ export function formatDelivery(day: UpcomingDay): DeliveryInfo {
     name: m.name ?? "Unknown",
     inventory_id: m.inventoryId ?? "",
     quantity: m.qty ?? 1,
-    price: 0,
-    chef: `${m.chef_firstname ?? ""} ${m.chef_lastname ?? ""}`.trim(),
+    price: null,
+    chef: chefName(m),
   }));
 
   return {
     date: day.displayDate,
     status,
+    meal_source: mealSource(day),
     can_edit: day.canEdit,
     menu_available: day.menuAvailable,
     cutoff: day.cutoff?.time ?? null,

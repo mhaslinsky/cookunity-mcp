@@ -4,7 +4,7 @@ import { GetPriceBreakdownSchema } from "../schemas/index.js";
 import type { GetPriceBreakdownInput } from "../schemas/index.js";
 import type { MealInput } from "../types.js";
 import { ResponseFormat } from "../constants.js";
-import { getNextMonday, handleError, toStructured } from "../services/helpers.js";
+import { getNextMonday, mealSource, handleError, toStructured } from "../services/helpers.js";
 
 export function registerPricingTools(server: McpServer, api: CookUnityAPI): void {
   server.registerTool(
@@ -15,7 +15,7 @@ export function registerPricingTools(server: McpServer, api: CookUnityAPI): void
 
 Args:
   - date (string, optional): YYYY-MM-DD delivery date. Defaults to next Monday.
-  - meals (array, optional): Meals to price, each with entityId, quantity, inventoryId. If omitted, prices the current cart contents.
+  - meals (array, optional): Meals to price, each with entityId, quantity, inventoryId. If omitted, prices what will ship: the confirmed order's items, else the cart, else CookUnity's auto-picks.
   - response_format ('markdown'|'json'): Output format
 
 Returns (JSON): { date, subtotal, taxes, delivery_fee, express_fee, promo_discount, total, total_after_credits, available_credits, qty_plan_meals, qty_items, total_extra_meals }
@@ -27,7 +27,7 @@ Examples:
   - Specific meals: { date: "2026-02-23", meals: [{ entityId: 12272, quantity: 1, inventoryId: "ii-135055242" }] }
 
 Error Handling:
-  - If no meals provided and cart is empty, returns error suggesting to add meals first
+  - If no meals provided and there is no order, cart or auto-picks, returns error suggesting to add meals first
   - Invalid meal IDs return API error`,
       inputSchema: GetPriceBreakdownSchema,
       annotations: {
@@ -49,23 +49,39 @@ Error Handling:
             inventoryId: m.inventoryId,
           }));
         } else {
-          // Get current cart contents
           const days = await api.getUpcomingDays();
           const day = days.find((d) => d.date === date || d.displayDate === date);
-          if (!day || !day.cart || day.cart.length === 0) {
+          const source = day ? mealSource(day) : "none";
+          if (!day || source === "none") {
             return {
               content: [{
                 type: "text" as const,
-                text: `No meals in cart for ${date}. Add meals with cookunity_add_to_cart first, or pass meals directly to this tool.`,
+                text: `No meals in the order, cart or auto-picks for ${date}. Add meals with cookunity_add_to_cart first, or pass meals directly to this tool.`,
               }],
               isError: true,
             };
           }
-          meals = day.cart.map((c) => ({
-            entityId: c.product.id,
-            quantity: c.qty,
-            inventoryId: c.product.inventoryId,
-          }));
+          if (source === "auto_picks") {
+            // Auto-picks carry no meal id in upcomingDays, so take it from the menu by inventoryId.
+            const menu = await api.getMenu(date);
+            const idByInventory = new Map(menu.meals.map((meal) => [meal.inventoryId, meal.id]));
+            meals = (day.recommendation?.meals ?? []).map((pick) => {
+              const entityId = idByInventory.get(pick.inventoryId);
+              if (entityId === undefined) {
+                throw new Error(`Auto-pick "${pick.name}" is not on the ${date} menu, so its meal id is unknown. Pass meals directly.`);
+              }
+              return { entityId, quantity: pick.qty, inventoryId: pick.inventoryId };
+            });
+          } else {
+            const entries = source === "order"
+              ? (day.order?.items ?? []).map((item) => ({ product: item.product, qty: item.qty }))
+              : day.cart;
+            meals = entries.map((entry) => ({
+              entityId: entry.product.id,
+              quantity: entry.qty,
+              inventoryId: entry.product.inventoryId,
+            }));
+          }
         }
 
         const breakdown = await api.getPriceBreakdown(date, meals);

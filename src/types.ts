@@ -248,17 +248,20 @@ export interface FormattedMeal {
   meat_type: string;
 }
 
+export type MealSource = "order" | "cart" | "auto_picks" | "none";
+
 export interface DeliveryMealInfo {
   name: string;
   inventory_id: string;
   quantity: number;
-  price: number;
+  price: number | null;
   chef: string;
 }
 
 export interface DeliveryInfo {
   date: string;
   status: "locked" | "active" | "skipped" | "paused";
+  meal_source: MealSource;
   can_edit: boolean;
   menu_available: boolean;
   cutoff: string | null;
@@ -268,7 +271,7 @@ export interface DeliveryInfo {
   order: {
     id: string;
     status: string | null;
-    grand_total: number;
+    grand_total: number | null;
     items: DeliveryMealInfo[];
     item_count: number;
   } | null;
