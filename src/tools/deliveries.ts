@@ -15,7 +15,7 @@ import type {
   NextDeliveryInput,
 } from "../schemas/index.js";
 import { ResponseFormat } from "../constants.js";
-import { getNextMonday, formatDelivery, formatPrice, pickNextDelivery, sourceMeals, totalPrice, handleError, toStructured } from "../services/helpers.js";
+import { findDay, getNextMonday, formatDelivery, formatPrice, pickNextDelivery, sourceMeals, totalPrice, handleError, toStructured } from "../services/helpers.js";
 
 export function registerDeliveryTools(server: McpServer, api: CookUnityAPI): void {
   server.registerTool(
@@ -120,7 +120,7 @@ Error Handling:
       try {
         const date = params.date ?? getNextMonday();
         const days = await api.getUpcomingDays();
-        const day = days.find((d) => d.date === date || d.displayDate === date);
+        const day = findDay(days, date);
         if (!day) {
           return { content: [{ type: "text", text: `Error: Date ${date} not found in upcoming deliveries. Use cookunity_list_deliveries to see available dates.` }], isError: true };
         }

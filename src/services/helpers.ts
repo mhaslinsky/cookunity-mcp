@@ -63,12 +63,28 @@ export function todayInNewYork(now: Date = new Date()): string {
   }).format(now);
 }
 
+/** upcomingDays returns meal ids as strings ("1091"); the price breakdown accepts only integers. */
+export function entityIdOf(id: unknown, mealName: string): number {
+  const entityId = Number(id);
+  if (!Number.isInteger(entityId)) throw new Error(`Meal "${mealName}" has no usable meal id (${String(id)})`);
+  return entityId;
+}
+
+/**
+ * A date can name a scheduled delivery by its Sunday menu key and an unscheduled slot by its
+ * display date at once, so the scheduled day wins.
+ */
+export function findDay(days: UpcomingDay[], date: string): UpcomingDay | undefined {
+  const matches = days.filter((day) => day.date === date || day.displayDate === date);
+  return matches.find((day) => day.scheduled) ?? matches[0];
+}
+
 /** Compares displayDate (the delivery day the site shows), not the Sunday menu key in `date`. */
 export function pickNextDelivery(days: UpcomingDay[], now: Date = new Date()): UpcomingDay | undefined {
   const today = todayInNewYork(now);
   return days
-    .filter((d) => d.scheduled && !d.skip && d.displayDate >= today)
-    .sort((a, b) => a.displayDate.localeCompare(b.displayDate))[0];
+    .filter((day) => day.scheduled && !day.skip && day.displayDate >= today)
+    .sort((earlier, later) => earlier.displayDate.localeCompare(later.displayDate))[0];
 }
 
 export function formatMeal(meal: Meal): FormattedMeal {

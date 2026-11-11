@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chefName, mealSource, pickNextDelivery } from "./helpers.js";
+import { chefName, findDay, mealSource, pickNextDelivery } from "./helpers.js";
 import type { UpcomingDay } from "../types.js";
 
 const pick = { name: "Auto Bowl", inventoryId: "ii-1", chef_firstname: "Ana", chef_lastname: "Ruiz", meat_type: null, qty: 1 };
@@ -32,6 +32,14 @@ test("chef names: two names, one name, blank first name", () => {
   assert.equal(chefName({ chef_firstname: "Ana", chef_lastname: "Ruiz" }), "Ana Ruiz");
   assert.equal(chefName({ chef_firstname: "Livy's All Day Cafe", chef_lastname: "     " }), "Livy's All Day Cafe");
   assert.throws(() => chefName({ name: "Mystery Stew", chef_firstname: "  ", chef_lastname: "Ruiz" }), /Mystery Stew/);
+});
+
+test("a date that is both a delivery's menu key and an unscheduled slot's display date finds the delivery", () => {
+  // Live on Nov 11: the unscheduled Sunday slot shown as Nov 15 comes before the Nov 16 delivery keyed 2026-11-15.
+  const unscheduledSunday = day({ date: "2026-11-15", displayDate: "2026-11-15", scheduled: false });
+  const delivery = day({});
+  assert.equal(findDay([unscheduledSunday, delivery], "2026-11-15"), delivery);
+  assert.equal(findDay([unscheduledSunday, delivery], "2026-11-16"), delivery);
 });
 
 test("next delivery compares displayDate in New York time", () => {

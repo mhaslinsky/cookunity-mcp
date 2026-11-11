@@ -4,7 +4,7 @@ import { GetPriceBreakdownSchema } from "../schemas/index.js";
 import type { GetPriceBreakdownInput } from "../schemas/index.js";
 import type { MealInput } from "../types.js";
 import { ResponseFormat } from "../constants.js";
-import { getNextMonday, mealSource, handleError, toStructured } from "../services/helpers.js";
+import { entityIdOf, findDay, getNextMonday, mealSource, handleError, toStructured } from "../services/helpers.js";
 
 export function registerPricingTools(server: McpServer, api: CookUnityAPI): void {
   server.registerTool(
@@ -50,7 +50,7 @@ Error Handling:
           }));
         } else {
           const days = await api.getUpcomingDays();
-          const day = days.find((d) => d.date === date || d.displayDate === date);
+          const day = findDay(days, date);
           const source = day ? mealSource(day) : "none";
           if (!day || source === "none") {
             return {
@@ -63,21 +63,22 @@ Error Handling:
           }
           if (source === "auto_picks") {
             // Auto-picks carry no meal id in upcomingDays, so take it from the menu by inventoryId.
-            const menu = await api.getMenu(date);
+            // The menu is keyed by the Sunday date, whichever date the caller passed.
+            const menu = await api.getMenu(day.date);
             const idByInventory = new Map(menu.meals.map((meal) => [meal.inventoryId, meal.id]));
             meals = (day.recommendation?.meals ?? []).map((pick) => {
-              const entityId = idByInventory.get(pick.inventoryId);
-              if (entityId === undefined) {
-                throw new Error(`Auto-pick "${pick.name}" is not on the ${date} menu, so its meal id is unknown. Pass meals directly.`);
+              const menuId = idByInventory.get(pick.inventoryId);
+              if (menuId === undefined) {
+                throw new Error(`Auto-pick "${pick.name}" is not on the ${day.date} menu, so its meal id is unknown. Pass meals directly.`);
               }
-              return { entityId, quantity: pick.qty, inventoryId: pick.inventoryId };
+              return { entityId: entityIdOf(menuId, pick.name), quantity: pick.qty, inventoryId: pick.inventoryId };
             });
           } else {
             const entries = source === "order"
               ? (day.order?.items ?? []).map((item) => ({ product: item.product, qty: item.qty }))
               : day.cart;
             meals = entries.map((entry) => ({
-              entityId: entry.product.id,
+              entityId: entityIdOf(entry.product.id, entry.product.name),
               quantity: entry.qty,
               inventoryId: entry.product.inventoryId,
             }));
