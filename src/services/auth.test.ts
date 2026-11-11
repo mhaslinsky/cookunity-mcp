@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { AxiosError } from "axios";
 import { CookUnityAuth } from "./auth.js";
 import { finish, start } from "../login.js";
 
@@ -29,8 +30,11 @@ test("parallel calls share one refresh, and the rotated token is saved owner-onl
 
 test("a failed refresh or an unsaved rotated token points at the login command", async (context) => {
   const path = tokenFile(context, "old");
-  const auth = new CookUnityAuth({ kind: "refresh", tokenFile: path }, async () => { throw new Error("invalid_grant"); });
-  await assert.rejects(auth.getAccessToken(), /refresh failed \(invalid_grant\)\. Run cookunity-mcp-login again/);
+  const rejected = new AxiosError("Request failed", "ERR_BAD_REQUEST", undefined, undefined, { status: 403, statusText: "Forbidden", data: { error_description: "Unknown or invalid refresh token." }, headers: {}, config: {} as never });
+  const auth = new CookUnityAuth({ kind: "refresh", tokenFile: path }, async () => { throw rejected; });
+  await assert.rejects(auth.getAccessToken(), /refresh failed \(Unknown or invalid refresh token\.\)\. Run cookunity-mcp-login again/);
+  const offline = new CookUnityAuth({ kind: "refresh", tokenFile: path }, async () => { throw new AxiosError("timeout", "ECONNABORTED"); });
+  await assert.rejects(offline.getAccessToken(), /refresh failed \(timeout\)\. The saved sign-in is kept; try again/);
   assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { refresh_token: "old" });
   const unsaved = new CookUnityAuth({ kind: "refresh", tokenFile: path }, async () => ({ access_token: "access", refresh_token: "new", expires_in: 86400 }));
   chmodSync(join(path, ".."), 0o500);

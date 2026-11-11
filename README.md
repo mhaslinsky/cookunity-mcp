@@ -90,7 +90,7 @@ npx cookunity-mcp-server
 
 These accounts have no CookUnity password. Leave `COOKUNITY_EMAIL` and `COOKUNITY_PASSWORD` unset and sign in once from a browser that is already signed in to CookUnity:
 
-1. Run `cookunity-mcp-login start`. It prints a short script.
+1. Run `cookunity-mcp-login start` (without a global install: `npx -p cookunity-mcp-server cookunity-mcp-login start`, and the same for `finish`). It prints a short script.
 2. Open https://subscription.cookunity.com, paste the script into the browser console, and copy the `code` and `state` it returns.
 3. Run `cookunity-mcp-login finish --code <code> --state <state>`.
 

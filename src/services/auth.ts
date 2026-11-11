@@ -57,7 +57,10 @@ export class CookUnityAuth {
         refresh_token: refreshToken,
       });
     } catch (error) {
-      throw new Error(`CookUnity sign-in refresh failed (${this.getErrorMessage(error)}). Run cookunity-mcp-login again.`);
+      // Only a rejected token needs the browser login; a network error or 5xx leaves the saved one valid.
+      const rejected = axios.isAxiosError(error) && [400, 401, 403].includes(error.response?.status ?? 0);
+      const next = rejected ? "Run cookunity-mcp-login again." : "The saved sign-in is kept; try again.";
+      throw new Error(`CookUnity sign-in refresh failed (${this.getErrorMessage(error)}). ${next}`);
     }
     const rotated = data.refresh_token;
     if (typeof data.access_token !== "string" || typeof data.expires_in !== "number" || (rotated !== undefined && (typeof rotated !== "string" || rotated === ""))) {
