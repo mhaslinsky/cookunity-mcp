@@ -15,7 +15,7 @@ import type {
   NextDeliveryInput,
 } from "../schemas/index.js";
 import { ResponseFormat } from "../constants.js";
-import { getNextMonday, formatDelivery, handleError, toStructured } from "../services/helpers.js";
+import { findDay, getNextMonday, formatDelivery, formatPrice, pickNextDelivery, sourceMeals, deliveryTotal, handleError, toStructured } from "../services/helpers.js";
 
 export function registerDeliveryTools(server: McpServer, api: CookUnityAPI): void {
   server.registerTool(
@@ -29,7 +29,7 @@ IMPORTANT: Always call this tool to get FRESH data before answering any question
 Args:
   - response_format ('markdown'|'json')
 
-Returns (JSON): { deliveries[{ date, status, can_edit, menu_available, cutoff, cutoff_timezone, cart_items[], cart_count, order, recommendation_items[] }] }
+Returns (JSON): { deliveries[{ date, status, meal_source ('order'|'cart'|'auto_picks'|'none'), can_edit, menu_available, cutoff, cutoff_timezone, cart_items[], cart_count, order, recommendation_items[] }] }
 
 Examples:
   - See upcoming weeks: {}
@@ -66,19 +66,19 @@ Error Handling:
           lines.push(`**Editable**: ${d.can_edit ? "Yes" : "No"} | **Menu available**: ${d.menu_available ? "Yes" : "No"}`);
 
           if (d.order) {
-            lines.push(`**Order** #${d.order.id} (${d.order.status ?? "unknown"}, $${d.order.grand_total.toFixed(2)}):`);
+            lines.push(`**Order** #${d.order.id} (${d.order.status ?? "unknown"}, ${formatPrice(d.order.grand_total)}):`);
             for (const item of d.order.items) {
-              lines.push(`  - ${item.name} x${item.quantity} — $${item.price.toFixed(2)} (${item.chef})`);
+              lines.push(`  - ${item.name} x${item.quantity}, ${formatPrice(item.price)} (${item.chef ?? "chef unknown"})`);
             }
           } else if (d.cart_count > 0) {
             lines.push(`**Cart** (${d.cart_count} items):`);
             for (const item of d.cart_items) {
-              lines.push(`  - ${item.name} x${item.quantity} — $${item.price.toFixed(2)} (${item.chef})`);
+              lines.push(`  - ${item.name} x${item.quantity}, ${formatPrice(item.price)} (${item.chef ?? "chef unknown"})`);
             }
           } else if (d.recommendation_count > 0) {
             lines.push(`**CookUnity Picks** (${d.recommendation_count} meals — not yet confirmed):`);
             for (const item of d.recommendation_items) {
-              lines.push(`  - ${item.name} x${item.quantity} (${item.chef})`);
+              lines.push(`  - ${item.name} x${item.quantity} (${item.chef ?? "chef unknown"})`);
             }
           } else {
             lines.push("**Meals**: None selected");
@@ -102,9 +102,9 @@ Args:
   - date (string, optional): YYYY-MM-DD. Defaults to next Monday.
   - response_format ('markdown'|'json')
 
-Returns (JSON): { date, can_edit, is_skipped, cutoff, items[{ name, inventory_id, quantity, price, chef }], total_items, total_price }
+Returns (JSON): { date, can_edit, is_skipped, cutoff, meal_source ('order'|'cart'|'auto_picks'|'none'), items[{ name, inventory_id, quantity, price, chef }], total_items, total_price }
 
-Note: If the order is already confirmed, cart may be empty — use cookunity_list_deliveries or cookunity_next_delivery instead to see confirmed order items.
+Note: Shows what will ship: the confirmed order's items, else the cart, else CookUnity's auto-picks (meal_source says which). Auto-picks carry no price.
 
 Error Handling:
   - Returns "Date not found" if date is not in upcoming deliveries`,
@@ -120,27 +120,23 @@ Error Handling:
       try {
         const date = params.date ?? getNextMonday();
         const days = await api.getUpcomingDays();
-        const day = days.find((d) => d.date === date || d.displayDate === date);
+        const day = findDay(days, date);
         if (!day) {
           return { content: [{ type: "text", text: `Error: Date ${date} not found in upcoming deliveries. Use cookunity_list_deliveries to see available dates.` }], isError: true };
         }
 
-        const items = (day.cart || []).map((c) => ({
-          name: c.product?.name ?? "Unknown",
-          inventory_id: c.product?.inventoryId ?? "",
-          quantity: c.qty,
-          price: c.product?.price_incl_tax ?? 0,
-          chef: `${c.product?.chef_firstname ?? ""} ${c.product?.chef_lastname ?? ""}`.trim(),
-        }));
+        const delivery = formatDelivery(day);
+        const items = sourceMeals(delivery);
 
         const output = {
           date: day.displayDate,
           can_edit: day.canEdit,
           is_skipped: day.skip,
           cutoff: day.cutoff?.time ?? null,
+          meal_source: delivery.meal_source,
           items,
           total_items: items.reduce((s, i) => s + i.quantity, 0),
-          total_price: items.reduce((s, i) => s + i.price * i.quantity, 0),
+          total_price: deliveryTotal(delivery, items),
         };
 
         if (params.response_format === ResponseFormat.JSON) {
@@ -148,13 +144,19 @@ Error Handling:
         }
 
         const lines = [`# Cart — ${output.date}`, `Status: ${day.skip ? "Skipped" : day.canEdit ? "Editable" : "Locked"}`, ""];
-        if (items.length === 0) {
-          lines.push("Cart is empty.");
+        if (delivery.meal_source === "none") {
+          lines.push("Cart is empty, and there are no auto-picks.");
         } else {
+          const labels = {
+            order: `Confirmed order #${delivery.order?.id ?? ""}`,
+            cart: "Cart (not confirmed)",
+            auto_picks: "CookUnity auto-picks (not confirmed, ship at cutoff)",
+          };
+          lines.push(`**${labels[delivery.meal_source]}**`, "");
           for (const item of items) {
-            lines.push(`- **${item.name}** x${item.quantity} — $${item.price.toFixed(2)} (${item.chef})`);
+            lines.push(`- **${item.name}** x${item.quantity}, ${formatPrice(item.price)} (${item.chef ?? "chef unknown"})`);
           }
-          lines.push("", `**Total**: ${output.total_items} items, $${output.total_price.toFixed(2)}`);
+          lines.push("", `**Total**: ${output.total_items} items, ${formatPrice(output.total_price)}`);
         }
         return { content: [{ type: "text", text: lines.join("\n") }], structuredContent: toStructured(output) };
       } catch (error) {
@@ -263,7 +265,7 @@ IMPORTANT:
 Args:
   - response_format ('markdown'|'json')
 
-Returns: The nearest delivery with date, status, meals (from order, cart, or recommendations), and cutoff info.`,
+Returns: The nearest delivery with date, status, meal_source ('order'|'cart'|'auto_picks'|'none'), meals (from that source), and cutoff info.`,
       inputSchema: NextDeliverySchema,
       annotations: {
         readOnlyHint: true,
@@ -275,34 +277,20 @@ Returns: The nearest delivery with date, status, meals (from order, cart, or rec
     async (params: NextDeliveryInput) => {
       try {
         const days = await api.getUpcomingDays();
-        const today = new Date().toISOString().split("T")[0];
-
-        // Find the nearest scheduled, non-skipped delivery (including today)
-        const next = days
-          .filter((d) => d.scheduled && !d.skip && d.date >= today)
-          .sort((a, b) => a.date.localeCompare(b.date))[0];
+        const next = pickNextDelivery(days);
 
         if (!next) {
           return { content: [{ type: "text", text: "No upcoming deliveries found. All scheduled deliveries may be skipped." }], isError: true };
         }
 
         const delivery = formatDelivery(next);
-        let mealSource: string;
-        let meals: { name: string; quantity: number; price: number; chef: string }[];
-
-        if (delivery.order) {
-          mealSource = `Confirmed order #${delivery.order.id} (${delivery.order.status ?? "unknown"})`;
-          meals = delivery.order.items;
-        } else if (delivery.cart_count > 0) {
-          mealSource = "Cart (NOT confirmed — will be replaced by CookUnity picks at cutoff)";
-          meals = delivery.cart_items;
-        } else if (delivery.recommendation_count > 0) {
-          mealSource = "CookUnity auto-picks (not confirmed by user)";
-          meals = delivery.recommendation_items;
-        } else {
-          mealSource = "No meals selected";
-          meals = [];
-        }
+        const meals = sourceMeals(delivery);
+        const sourceLabels = {
+          order: `Confirmed order #${delivery.order?.id ?? ""} (${delivery.order?.status ?? "unknown"})`,
+          cart: "Cart (NOT confirmed, will be replaced by CookUnity picks at cutoff)",
+          auto_picks: "CookUnity auto-picks (not confirmed by user)",
+          none: "No meals selected",
+        };
 
         const output = {
           date: delivery.date,
@@ -310,10 +298,11 @@ Returns: The nearest delivery with date, status, meals (from order, cart, or rec
           can_edit: delivery.can_edit,
           cutoff: delivery.cutoff,
           cutoff_timezone: delivery.cutoff_timezone,
-          meal_source: mealSource,
+          meal_source: delivery.meal_source,
+          meal_source_label: sourceLabels[delivery.meal_source],
           meals,
           total_meals: meals.reduce((s, m) => s + m.quantity, 0),
-          total_price: delivery.order?.grand_total ?? meals.reduce((s, m) => s + m.price * m.quantity, 0),
+          total_price: deliveryTotal(delivery, meals),
         };
 
         if (params.response_format === ResponseFormat.JSON) {
@@ -322,17 +311,14 @@ Returns: The nearest delivery with date, status, meals (from order, cart, or rec
 
         const lines = [`# Next Delivery: ${output.date}`, `**Status**: ${output.status} | **Editable**: ${output.can_edit ? "Yes" : "No"}`];
         if (output.cutoff) lines.push(`**Cutoff**: ${output.cutoff} (${output.cutoff_timezone ?? ""})`);
-        lines.push(`**Source**: ${mealSource}`, "");
+        lines.push(`**Source**: ${output.meal_source_label}`, "");
         if (meals.length === 0) {
           lines.push("No meals selected yet.");
         } else {
           for (const m of meals) {
-            const priceStr = m.price > 0 ? ` — $${m.price.toFixed(2)}` : "";
-            lines.push(`- **${m.name}** x${m.quantity}${priceStr} (${m.chef})`);
+            lines.push(`- **${m.name}** x${m.quantity}, ${formatPrice(m.price)} (${m.chef ?? "chef unknown"})`);
           }
-          if (output.total_price > 0) {
-            lines.push("", `**Total**: ${output.total_meals} meals, $${output.total_price.toFixed(2)}`);
-          }
+          lines.push("", `**Total**: ${output.total_meals} meals, ${formatPrice(output.total_price)}`);
         }
         return { content: [{ type: "text", text: lines.join("\n") }], structuredContent: toStructured(output) };
       } catch (error) {

@@ -33,7 +33,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "clean": "rm -rf dist",
-    "test": "tsx --test src/services/auth.test.ts"
+    "test": "tsx --test src/services/auth.test.ts src/services/helpers.test.ts"
   },
   "engines": {
     "node": ">=18"
