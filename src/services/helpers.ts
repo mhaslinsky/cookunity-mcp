@@ -1,15 +1,6 @@
 import type { Meal, FormattedMeal, UpcomingDay, DeliveryInfo, DeliveryMealInfo, MealSource } from "../types.js";
 import { CHARACTER_LIMIT } from "../constants.js";
 
-export function getNextMonday(): string {
-  const today = new Date();
-  const dayOfWeek = today.getDay();
-  const daysUntilMonday = dayOfWeek === 0 ? 1 : 8 - dayOfWeek;
-  const nextMonday = new Date(today);
-  nextMonday.setDate(today.getDate() + daysUntilMonday);
-  return nextMonday.toISOString().split("T")[0];
-}
-
 /** The one place that decides which of order, cart or auto-picks ships. */
 export function mealSource(day: UpcomingDay): MealSource {
   if (day.order?.items?.length) return "order";
@@ -78,21 +69,47 @@ export function entityIdOf(id: unknown, mealName: string): number {
   return entityId;
 }
 
+export interface ResolvedDelivery {
+  day: UpcomingDay;
+  /** The Sunday key the subscription, menu and price APIs take. */
+  menuKey: string;
+  /** The Monday the site shows, and the date every tool reports. */
+  displayDate: string;
+}
+
+function resolved(day: UpcomingDay): ResolvedDelivery {
+  return { day, menuKey: day.date, displayDate: day.displayDate };
+}
+
 /**
- * A date can name a scheduled delivery by its Sunday menu key and an unscheduled slot by its
- * display date at once, so the scheduled day wins.
+ * Accepts either date of a delivery. An unscheduled slot can share a date string with a scheduled
+ * delivery, so the scheduled day wins.
  */
-export function findDay(days: UpcomingDay[], date: string): UpcomingDay | undefined {
-  const matches = days.filter((day) => day.date === date || day.displayDate === date);
-  return matches.find((day) => day.scheduled) ?? matches[0];
+export function resolveDelivery(days: UpcomingDay[], anyDate: string): ResolvedDelivery | undefined {
+  const matches = days.filter((day) => day.date === anyDate || day.displayDate === anyDate);
+  const match = matches.find((day) => day.scheduled) ?? matches[0];
+  return match && resolved(match);
 }
 
 /** Compares displayDate (the delivery day the site shows), not the Sunday menu key in `date`. */
-export function pickNextDelivery(days: UpcomingDay[], now: Date = new Date()): UpcomingDay | undefined {
+export function nextDelivery(days: UpcomingDay[], now: Date = new Date()): ResolvedDelivery | undefined {
   const today = todayInNewYork(now);
-  return days
+  const next = days
     .filter((day) => day.scheduled && !day.skip && day.displayDate >= today)
     .sort((earlier, later) => earlier.displayDate.localeCompare(later.displayDate))[0];
+  return next && resolved(next);
+}
+
+/** The delivery for a caller's date, or the next one when the caller gave none; throws when there is none. */
+export function requireDelivery(days: UpcomingDay[], anyDate: string | undefined): ResolvedDelivery {
+  if (anyDate === undefined) {
+    const next = nextDelivery(days);
+    if (!next) throw new Error("No upcoming deliveries found. All scheduled deliveries may be skipped.");
+    return next;
+  }
+  const found = resolveDelivery(days, anyDate);
+  if (!found) throw new Error(`Date ${anyDate} not found in upcoming deliveries. Use cookunity_list_deliveries to see available dates.`);
+  return found;
 }
 
 export function formatMeal(meal: Meal): FormattedMeal {

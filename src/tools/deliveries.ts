@@ -15,7 +15,7 @@ import type {
   NextDeliveryInput,
 } from "../schemas/index.js";
 import { ResponseFormat } from "../constants.js";
-import { findDay, getNextMonday, formatDelivery, formatPrice, pickNextDelivery, sourceMeals, deliveryTotal, handleError, toStructured } from "../services/helpers.js";
+import { requireDelivery, nextDelivery, formatDelivery, formatPrice, sourceMeals, deliveryTotal, handleError, toStructured } from "../services/helpers.js";
 
 export function registerDeliveryTools(server: McpServer, api: CookUnityAPI): void {
   server.registerTool(
@@ -99,7 +99,7 @@ Error Handling:
       description: `Get cart contents for a specific delivery date. Always call fresh — NEVER use cached results.
 
 Args:
-  - date (string, optional): YYYY-MM-DD. Defaults to next Monday.
+  - date (string, optional): YYYY-MM-DD. Defaults to the next delivery.
   - response_format ('markdown'|'json')
 
 Returns (JSON): { date, can_edit, is_skipped, cutoff, meal_source ('order'|'cart'|'auto_picks'|'none'), items[{ name, inventory_id, quantity, price, chef }], total_items, total_price }
@@ -118,18 +118,13 @@ Error Handling:
     },
     async (params: GetCartInput) => {
       try {
-        const date = params.date ?? getNextMonday();
-        const days = await api.getUpcomingDays();
-        const day = findDay(days, date);
-        if (!day) {
-          return { content: [{ type: "text", text: `Error: Date ${date} not found in upcoming deliveries. Use cookunity_list_deliveries to see available dates.` }], isError: true };
-        }
+        const { day, displayDate } = requireDelivery(await api.getUpcomingDays(), params.date);
 
         const delivery = formatDelivery(day);
         const items = sourceMeals(delivery);
 
         const output = {
-          date: day.displayDate,
+          date: displayDate,
           can_edit: day.canEdit,
           is_skipped: day.skip,
           cutoff: day.cutoff?.time ?? null,
@@ -172,12 +167,12 @@ Error Handling:
       description: `Skip a delivery week. IMPORTANT: Always call cookunity_list_deliveries first to get valid delivery dates — do NOT guess or calculate dates manually.
 
 Args:
-  - date (string, required): YYYY-MM-DD delivery date to skip (must match an actual delivery date from cookunity_list_deliveries)
+  - date (string, required): YYYY-MM-DD delivery date to skip (the delivery date from cookunity_list_deliveries)
 
 Returns: Confirmation message with skip ID
 
 Error Handling:
-  - Invalid date: returns available delivery dates
+  - Unknown date: returns an error pointing at cookunity_list_deliveries
   - Past cutoff: returns error suggesting checking cutoff with list_deliveries
   - Already skipped: returns API error`,
       inputSchema: SkipDeliverySchema,
@@ -190,17 +185,12 @@ Error Handling:
     },
     async (params: SkipDeliveryInput) => {
       try {
-        // Validate date against actual upcoming deliveries
-        const days = await api.getUpcomingDays();
-        const validDates = days.map((d) => d.date);
-        if (!validDates.includes(params.date)) {
-          return { content: [{ type: "text", text: `Error: "${params.date}" is not a valid delivery date. Available dates: ${validDates.join(", ")}. Use cookunity_list_deliveries to see your delivery calendar.` }], isError: true };
-        }
-        const result = await api.skipDelivery(params.date);
+        const { menuKey, displayDate } = requireDelivery(await api.getUpcomingDays(), params.date);
+        const result = await api.skipDelivery(menuKey);
         if (result.__typename === "OrderCreationError") {
           return { content: [{ type: "text", text: `Error: ${result.error ?? "Failed to skip delivery"}. Check cutoff with cookunity_list_deliveries.` }], isError: true };
         }
-        const output = { success: true, date: params.date, skip_id: result.id, message: `Delivery for ${params.date} has been skipped.` };
+        const output = { success: true, date: displayDate, skip_id: result.id, message: `Delivery for ${displayDate} has been skipped.` };
         return { content: [{ type: "text", text: output.message }], structuredContent: toStructured(output) };
       } catch (error) {
         return handleError(error);
@@ -215,12 +205,12 @@ Error Handling:
       description: `Unskip a previously skipped delivery week. IMPORTANT: Always call cookunity_list_deliveries first to get valid delivery dates — do NOT guess or calculate dates manually.
 
 Args:
-  - date (string, required): YYYY-MM-DD delivery date to unskip (must match an actual delivery date from cookunity_list_deliveries)
+  - date (string, required): YYYY-MM-DD delivery date to unskip (the delivery date from cookunity_list_deliveries)
 
 Returns: Confirmation message
 
 Error Handling:
-  - Invalid date: returns available delivery dates
+  - Unknown date: returns an error pointing at cookunity_list_deliveries
   - Week not skipped: returns API error`,
       inputSchema: UnskipDeliverySchema,
       annotations: {
@@ -232,17 +222,12 @@ Error Handling:
     },
     async (params: UnskipDeliveryInput) => {
       try {
-        // Validate date against actual upcoming deliveries
-        const days = await api.getUpcomingDays();
-        const validDates = days.map((d) => d.date);
-        if (!validDates.includes(params.date)) {
-          return { content: [{ type: "text", text: `Error: "${params.date}" is not a valid delivery date. Available dates: ${validDates.join(", ")}. Use cookunity_list_deliveries to see your delivery calendar.` }], isError: true };
-        }
-        const result = await api.unskipDelivery(params.date);
+        const { menuKey, displayDate } = requireDelivery(await api.getUpcomingDays(), params.date);
+        const result = await api.unskipDelivery(menuKey);
         if (result.__typename === "OrderCreationError") {
           return { content: [{ type: "text", text: `Error: ${result.error ?? "Failed to unskip delivery"}.` }], isError: true };
         }
-        const output = { success: true, date: params.date, message: `Delivery for ${params.date} has been unskipped.` };
+        const output = { success: true, date: displayDate, message: `Delivery for ${displayDate} has been unskipped.` };
         return { content: [{ type: "text", text: output.message }], structuredContent: toStructured(output) };
       } catch (error) {
         return handleError(error);
@@ -277,13 +262,13 @@ Returns: The nearest delivery with date, status, meal_source ('order'|'cart'|'au
     async (params: NextDeliveryInput) => {
       try {
         const days = await api.getUpcomingDays();
-        const next = pickNextDelivery(days);
+        const next = nextDelivery(days);
 
         if (!next) {
           return { content: [{ type: "text", text: "No upcoming deliveries found. All scheduled deliveries may be skipped." }], isError: true };
         }
 
-        const delivery = formatDelivery(next);
+        const delivery = formatDelivery(next.day);
         const meals = sourceMeals(delivery);
         const sourceLabels = {
           order: `Confirmed order #${delivery.order?.id ?? ""} (${delivery.order?.status ?? "unknown"})`,
@@ -293,7 +278,7 @@ Returns: The nearest delivery with date, status, meal_source ('order'|'cart'|'au
         };
 
         const output = {
-          date: delivery.date,
+          date: next.displayDate,
           status: delivery.status,
           can_edit: delivery.can_edit,
           cutoff: delivery.cutoff,

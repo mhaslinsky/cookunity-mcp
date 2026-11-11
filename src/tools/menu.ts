@@ -4,7 +4,7 @@ import { GetMenuSchema, SearchMealsSchema, GetMealDetailsSchema } from "../schem
 import type { GetMenuInput, SearchMealsInput, GetMealDetailsInput } from "../schemas/index.js";
 import type { DetailedMeal } from "../types.js";
 import { ResponseFormat } from "../constants.js";
-import { getNextMonday, formatMeal, formatMealMarkdown, handleError, toStructured } from "../services/helpers.js";
+import { requireDelivery, formatMeal, formatMealMarkdown, handleError, toStructured } from "../services/helpers.js";
 export function registerMenuTools(server: McpServer, api: CookUnityAPI): void {
   server.registerTool(
     "cookunity_get_menu",
@@ -13,7 +13,7 @@ export function registerMenuTools(server: McpServer, api: CookUnityAPI): void {
       description: `Browse available meals for a delivery date with optional filters and pagination.
 
 Args:
-  - date (string, optional): YYYY-MM-DD delivery date. Defaults to next Monday.
+  - date (string, optional): YYYY-MM-DD delivery date. Defaults to the next delivery.
   - category (string, optional): Filter by category (e.g. 'Bowls', 'Protein+')
   - diet (string, optional): Filter by diet tag (e.g. 'vegan', 'gluten-free')
   - max_price (number, optional): Max price in dollars
@@ -43,8 +43,8 @@ Error Handling:
     },
     async (params: GetMenuInput) => {
       try {
-        const date = params.date ?? getNextMonday();
-        const menu = await api.getMenu(date);
+        const { menuKey, displayDate: date } = requireDelivery(await api.getUpcomingDays(), params.date);
+        const menu = await api.getMenu(menuKey);
         let meals = menu.meals;
 
         // Apply filters
@@ -111,7 +111,7 @@ Error Handling:
 
 Args:
   - query (string, required): Search keyword (min 1 char)
-  - date (string, optional): YYYY-MM-DD. Defaults to next Monday.
+  - date (string, optional): YYYY-MM-DD. Defaults to the next delivery.
   - limit (number): Results per page, default 20
   - offset (number): Pagination offset
   - response_format ('markdown'|'json'): Output format
@@ -135,8 +135,8 @@ Error Handling:
     },
     async (params: SearchMealsInput) => {
       try {
-        const date = params.date ?? getNextMonday();
-        const results = await api.searchMeals(params.query, date);
+        const { menuKey, displayDate: date } = requireDelivery(await api.getUpcomingDays(), params.date);
+        const results = await api.searchMeals(params.query, menuKey);
         const total = results.length;
         const paged = results.slice(params.offset, params.offset + params.limit);
         const formatted = paged.map(formatMeal);
@@ -182,7 +182,7 @@ Error Handling:
 Args:
   - meal_id (number, optional): Numeric meal ID (e.g. 12272)
   - inventory_id (string, optional): Inventory ID (e.g. "ii-135055242")
-  - date (string, optional): YYYY-MM-DD menu date. Defaults to next Monday.
+  - date (string, optional): YYYY-MM-DD menu date. Defaults to the next delivery.
   - response_format ('markdown'|'json'): Output format
 
 At least one of meal_id or inventory_id is required.
@@ -207,8 +207,8 @@ Error Handling:
     },
     async (params: GetMealDetailsInput) => {
       try {
-        const date = params.date ?? getNextMonday();
-        const meals = await api.getMenuDetailed(date);
+        const { menuKey, displayDate: date } = requireDelivery(await api.getUpcomingDays(), params.date);
+        const meals = await api.getMenuDetailed(menuKey);
 
         const meal = meals.find((m) => {
           if (params.meal_id !== undefined && String(m.id) === String(params.meal_id)) return true;

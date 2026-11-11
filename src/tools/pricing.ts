@@ -4,7 +4,7 @@ import { GetPriceBreakdownSchema } from "../schemas/index.js";
 import type { GetPriceBreakdownInput } from "../schemas/index.js";
 import type { MealInput, MealSource } from "../types.js";
 import { ResponseFormat } from "../constants.js";
-import { entityIdOf, findDay, getNextMonday, mealSource, handleError, toStructured } from "../services/helpers.js";
+import { entityIdOf, requireDelivery, mealSource, handleError, toStructured } from "../services/helpers.js";
 
 export function registerPricingTools(server: McpServer, api: CookUnityAPI): void {
   server.registerTool(
@@ -14,7 +14,7 @@ export function registerPricingTools(server: McpServer, api: CookUnityAPI): void
       description: `Get a full price breakdown for a delivery including subtotal, taxes, delivery fee, discounts, and total.
 
 Args:
-  - date (string, optional): YYYY-MM-DD delivery date. Defaults to next Monday.
+  - date (string, optional): YYYY-MM-DD delivery date. Defaults to the next delivery.
   - meals (array, optional): Meals to price, each with entityId, quantity, inventoryId. If omitted, prices what will ship: the confirmed order's items, else the cart, else CookUnity's auto-picks.
   - response_format ('markdown'|'json'): Output format
 
@@ -39,11 +39,11 @@ Error Handling:
     },
     async (params: GetPriceBreakdownInput) => {
       try {
-        const date = params.date ?? getNextMonday();
+        // Prices and menus are keyed by the Sunday date; the output reports the delivery date the
+        // other tools show, whichever of the two the caller passed.
+        const { day, menuKey, displayDate } = requireDelivery(await api.getUpcomingDays(), params.date);
         let meals: MealInput[];
         let pricedSource: MealSource | "given" = "given";
-        let menuDate = date;
-        let deliveryDate = date;
 
         if (params.meals && params.meals.length > 0) {
           meals = params.meals.map((m) => ({
@@ -52,31 +52,25 @@ Error Handling:
             inventoryId: m.inventoryId,
           }));
         } else {
-          const days = await api.getUpcomingDays();
-          const day = findDay(days, date);
-          const source = day ? mealSource(day) : "none";
-          if (!day || source === "none") {
+          const source = mealSource(day);
+          if (source === "none") {
             return {
               content: [{
                 type: "text" as const,
-                text: `No meals in the order, cart or auto-picks for ${date}. Add meals with cookunity_add_to_cart first, or pass meals directly to this tool.`,
+                text: `No meals in the order, cart or auto-picks for ${displayDate}. Add meals with cookunity_add_to_cart first, or pass meals directly to this tool.`,
               }],
               isError: true,
             };
           }
           pricedSource = source;
-          // Prices and menus are keyed by the Sunday date; the output reports the delivery date the
-          // other tools show, whichever of the two the caller passed.
-          menuDate = day.date;
-          deliveryDate = day.displayDate;
           if (source === "auto_picks") {
             // Auto-picks carry no meal id in upcomingDays, so take it from the menu by inventoryId.
-            const menu = await api.getMenu(menuDate);
+            const menu = await api.getMenu(menuKey);
             const idByInventory = new Map(menu.meals.map((meal) => [meal.inventoryId, meal.id]));
             meals = (day.recommendation?.meals ?? []).map((pick) => {
               const menuId = idByInventory.get(pick.inventoryId);
               if (menuId === undefined) {
-                throw new Error(`Auto-pick "${pick.name}" is not on the ${day.date} menu, so its meal id is unknown. Pass meals directly.`);
+                throw new Error(`Auto-pick "${pick.name}" is not on the ${displayDate} menu, so its meal id is unknown. Pass meals directly.`);
               }
               if (!Number.isInteger(pick.qty) || pick.qty < 1) {
                 throw new Error(`Auto-pick "${pick.name}" has no quantity. Pass meals directly.`);
@@ -95,10 +89,10 @@ Error Handling:
           }
         }
 
-        const breakdown = await api.getPriceBreakdown(menuDate, meals);
+        const breakdown = await api.getPriceBreakdown(menuKey, meals);
 
         const output = {
-          date: deliveryDate,
+          date: displayDate,
           meal_source: pricedSource,
           qty_plan_meals: breakdown.qtyPlanMeals,
           qty_items: breakdown.qtyItems,
